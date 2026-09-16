@@ -37,13 +37,16 @@ function isAbilityPicker(type: string, _payload: DialogPayload): _payload is Abi
   return type === "GAME_CHOOSE_ABILITY";
 }
 
-/** Best-effort card lookup for GAME_TARGET/GAME_SELECT's bare UUID lists.
- * `revealed`/`lookedAt` matter here specifically for library searches (Prismatic Vista
- * and friends): the cards a fetch effect lets you pick from are surfaced there, not in
- * any zone this used to check - without this, every option in that dialog fell back to
- * a meaningless truncated id (and no card art), which is exactly what made searching
- * look broken. */
-function findCard(game: GameView | null, id: string): CardView | null {
+/** Best-effort card lookup for GAME_TARGET/GAME_SELECT's bare UUID lists. `cardsView1`
+ * (when given - the current dialog's own payload) matters most for a "search your
+ * library" target (fetch lands, tutors, ...): that's the searched zone itself, real
+ * card data for exactly these ids and nowhere else (see GameClientMessage's doc
+ * comment in types/envelope.ts) - checked first since it's the most specific match.
+ * `revealed`/`lookedAt` cover a couple of other reveal-shaped effects. Without any of
+ * this, every option in a search dialog fell back to a meaningless truncated id (and
+ * no card art), which is exactly what made searching look broken. */
+function findCard(game: GameView | null, id: string, cardsView1?: CardsView): CardView | null {
+  if (cardsView1?.[id]) return cardsView1[id];
   if (!game) return null;
   const players = game.players ?? [];
   const pools: (CardsView | undefined)[] = [
@@ -62,10 +65,10 @@ function findCard(game: GameView | null, id: string): CardView | null {
 
 /** A target can be a player (e.g. "Select a starting player", "choose a player to
  * discard") just as often as a card - falls back to a truncated id if neither matches. */
-function findCardName(game: GameView | null, id: string): string {
+function findCardName(game: GameView | null, id: string, cardsView1?: CardsView): string {
   const player = game?.players?.find((p) => p.playerId === id);
   if (player) return player.name;
-  return findCard(game, id)?.name ?? id.slice(0, 8);
+  return findCard(game, id, cardsView1)?.name ?? id.slice(0, 8);
 }
 
 export function DialogPrompt({ type, payload, game, onRespond, onHover }: DialogPromptProps) {
@@ -174,20 +177,32 @@ export function DialogPrompt({ type, payload, game, onRespond, onHover }: Dialog
   }
 
   /** A target is a real card (library search results included, via findCard's
-   * revealed/lookedAt lookup) as often as it's a player or something we can't resolve
-   * at all - show actual card art when we can instead of a same-looking text button
-   * for every option, which is exactly what made picking a card out of a fetch land's
-   * search results unreadable. */
-  function renderTargetOption(id: string) {
-    const card = findCard(game, id);
+   * cardsView1/revealed/lookedAt lookup) as often as it's a player or something we
+   * can't resolve at all - show actual card art when we can instead of a same-looking
+   * text button for every option, which is exactly what made picking a card out of a
+   * fetch land's search results unreadable. */
+  function renderTargetOption(id: string, cardsView1?: CardsView) {
+    const card = findCard(game, id, cardsView1);
     if (card) {
       return <CardTile key={id} card={card} onClick={() => onRespond("send_uuid", [id])} playable onHover={onHover} />;
     }
     return (
       <button key={id} onClick={() => onRespond("send_uuid", [id])}>
-        {findCardName(game, id)}
+        {findCardName(game, id, cardsView1)}
       </button>
     );
+  }
+
+  /** GAME_TARGET's `targets` field is confirmed NULL for a "search your library"
+   * target (TargetCardInLibrary: fetch lands, tutors, ...) - GameController.target
+   * passes the Cards-event's own null `targets` straight through, and the real legal
+   * ids only exist in options.possibleTargets for that case (see types/envelope.ts).
+   * A plain permanent/player target populates `targets` directly instead and has no
+   * possibleTargets at all, so preferring a non-empty `targets` first and falling back
+   * to possibleTargets covers both shapes without needing to know which one this is. */
+  function resolveTargetIds(gcm: GameClientMessage): string[] {
+    if (gcm.targets && gcm.targets.length > 0) return gcm.targets;
+    return gcm.options?.possibleTargets ?? [];
   }
 
   function renderBody() {
@@ -213,7 +228,7 @@ export function DialogPrompt({ type, payload, game, onRespond, onHover }: Dialog
       case "GAME_TARGET":
         return (
           <>
-            {(gcm.targets ?? []).map((id) => renderTargetOption(id))}
+            {resolveTargetIds(gcm).map((id) => renderTargetOption(id, gcm.cardsView1))}
             {!gcm.flag && <button onClick={() => onRespond("send_boolean", [false])}>Cancel</button>}
           </>
         );
@@ -238,7 +253,7 @@ export function DialogPrompt({ type, payload, game, onRespond, onHover }: Dialog
         }
         return (
           <>
-            {(gcm.targets ?? []).map((id) => renderTargetOption(id))}
+            {resolveTargetIds(gcm).map((id) => renderTargetOption(id, gcm.cardsView1))}
             {/* This is the ordinary priority window (not a target/combat pick) - the
               * only "response" here is passing priority, which advances the phase/step
               * once everyone's passed, or ends the turn once there's nothing left to

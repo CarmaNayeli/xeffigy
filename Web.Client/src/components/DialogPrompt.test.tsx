@@ -62,6 +62,53 @@ describe("DialogPrompt", () => {
     expect(onRespond).toHaveBeenCalledWith("send_uuid", ["land-1"]);
   });
 
+  it("falls back to options.possibleTargets when targets is null (real shape for a 'search your library' target, e.g. a fetch land) - and finds the card via cardsView1", () => {
+    const onRespond = vi.fn();
+    // Confirmed real shape (traced through GameController.target ->
+    // GameSessionPlayer.target -> GameClientMessage's Cards-based constructor):
+    // `targets` is always null for TargetCardInLibrary, and cardsView1 is the FULL,
+    // unfiltered searched zone (here: the whole library) - only options.possibleTargets
+    // says which of those are actually legal to pick. This is what fetch lands
+    // (Marsh Flats, Bloodstained Mire, ...) and tutors go through.
+    render(
+      <DialogPrompt
+        type="GAME_TARGET"
+        payload={{
+          message: "Search your library for a Plains or Swamp card",
+          targets: null,
+          flag: true,
+          cardsView1: {
+            "plains-1": { id: "plains-1", name: "Plains" },
+            "island-1": { id: "island-1", name: "Island" },
+          },
+          options: { possibleTargets: ["plains-1"] },
+        }}
+        game={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    // Only the legal one (Plains) renders - the Island sitting in the same searched
+    // pool isn't a real option and must not appear at all.
+    expect(screen.getByTitle("Plains")).toBeInTheDocument();
+    expect(screen.queryByTitle("Island")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle("Plains"));
+    expect(onRespond).toHaveBeenCalledWith("send_uuid", ["plains-1"]);
+  });
+
+  it("shows only Cancel when a library search finds no legal target at all (both targets and possibleTargets empty)", () => {
+    render(
+      <DialogPrompt
+        type="GAME_TARGET"
+        payload={{ message: "Search your library for a Plains or Swamp card", targets: null, flag: false, cardsView1: {} }}
+        game={null}
+        onRespond={noop}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
   it("resolves player-id targets (e.g. 'Select a starting player') to player names, not raw UUIDs", () => {
     const onRespond = vi.fn();
     const game = {

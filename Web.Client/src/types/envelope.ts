@@ -73,18 +73,35 @@ export interface GatewayEnvelope<T = unknown> {
  */
 export interface GameClientMessage {
   gameView?: GameView;
-  /** GAME_TARGET: the card/permanent being targeted FROM. GAME_CHOOSE_PILE: pile 1. */
+  /** GAME_CHOOSE_PILE: pile 1. GAME_TARGET: confirmed real (traced through
+   * GameController.target -> GameSessionPlayer.target -> GameClientMessage's
+   * (cardsView1, targets) constructor) - for a "search your library" style target
+   * (TargetCardInLibrary: fetch lands, tutors, ...) this is the FULL, unfiltered pool
+   * being searched (e.g. the player's entire library), not just the legal picks -
+   * `targets` itself is null for this call site (see below), so this is where a
+   * candidate's actual card data (name/art) has to come from instead. */
   cardsView1?: CardsView;
   /** GAME_CHOOSE_PILE: pile 2. */
   cardsView2?: CardsView;
   message?: string;
   /** GAME_TARGET: whether a target is required (false = a Cancel/pass response is valid). */
   flag?: boolean;
-  /** GAME_TARGET/GAME_SELECT: legal UUIDs to pick from (Set<UUID> on the Java side). */
-  targets?: string[];
+  /** GAME_TARGET/GAME_SELECT: legal UUIDs to pick from (Set<UUID> on the Java side) -
+   * populated for a plain permanent/player target (Beast Within, "select a starting
+   * player", ...). Confirmed NULL for a "search your library" style target
+   * (TargetCardInLibrary) - GameController.target passes the Cards-event's own
+   * `targets` straight through unchanged, and that event's constructor
+   * (PlayerQueryEvent.targetEvent(Cards, ...)) hardcodes it to null. The real legal
+   * ids for that case live in options.possibleTargets instead - see DialogPrompt.tsx's
+   * GAME_TARGET case, which falls back to that field whenever this one is empty. */
+  targets?: string[] | null;
   min?: number;
   max?: number;
-  options?: Record<string, unknown>;
+  /** GAME_TARGET's "search your library" case (see targets/cardsView1 above) puts the
+   * actual legal-to-pick ids here instead, as options.possibleTargets: string[]
+   * (HumanPlayer.chooseTarget(Cards, ...) - `options.put("possibleTargets", ...)`,
+   * only present at all when at least one legal target exists). */
+  options?: Record<string, unknown> & { possibleTargets?: string[] };
   choice?: ChoiceView;
   messages?: MultiAmountMessage[];
 }
